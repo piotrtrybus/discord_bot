@@ -2,6 +2,9 @@ import discord
 from quart import Quart, request, jsonify
 import asyncio
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 intents = discord.Intents.default()
 intents.messages = True
