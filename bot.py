@@ -1,10 +1,11 @@
 import discord
-from quart import Quart, request, jsonify
+from quart import Quart, request, jsonify, Response
 import asyncio
 import os
 from dotenv import load_dotenv
 import hypercorn.asyncio
 from hypercorn.config import Config
+import base64
 
 load_dotenv()
 
@@ -18,8 +19,30 @@ client = discord.Client(intents=intents)
 # Initialize Quart app
 app = Quart(__name__)
 
+def check_auth(auth_header):
+    if not auth_header:
+        return False
+
+    try:
+        auth_type, credentials = auth_header.split(" ")
+        if auth_type.lower() != "basic":
+            return False
+
+        decoded_credentials = base64.b64decode(credentials).decode("utf-8")
+        username, password = decoded_credentials.split(":")
+
+        # Replace 'your_username' and 'your_password' with actual credentials
+        return username == "p_trybus" and password == "auth123"
+    except Exception as e:
+        print(f"[ERROR] Invalid authentication format: {e}")
+        return False
+
 @app.route('/webhook', methods=['POST'])
 async def webhook():
+    auth_header = request.headers.get('Authorization')
+    if not check_auth(auth_header):
+        return Response("Unauthorized", status=401)
+
     data = await request.get_json()
     user_id = data.get('user_id')
     message_content = data.get('message', 'Hello World')  # Default to 'Hello World' if no message is provided
@@ -33,14 +56,21 @@ async def send_dm(user_id, content):
         user = await client.fetch_user(user_id)
         if user:
             await user.send(content)
-            print(f"Message sent to {user.display_name}")
+            print(f"Message sent to {user.display_name} ({user_id})")
     except discord.Forbidden:
-        print(f"Couldn't send a DM to {user.display_name}")
+        print(f"Couldn't send a DM to {user.display_name} ({user_id}) - Forbidden")
     except discord.HTTPException as e:
-        print(f"Failed to send a DM: {e}")
+        print(f"Failed to send a DM to {user_id}: {e}")
+    except Exception as e:
+        print(f"Unexpected error when sending DM to {user_id}: {e}")
+
 
 @app.route('/fetch_member_ids', methods=['GET'])
 async def fetch_member_ids_endpoint():
+    auth_header = request.headers.get('Authorization')
+    if not check_auth(auth_header):
+        return Response("Unauthorized", status=401)
+
     try:
         member_ids = await fetch_member_ids()
         return jsonify({"member_ids": member_ids}), 200
@@ -59,15 +89,20 @@ async def fetch_member_ids():
         print('Guild not found')
         raise Exception('Guild not found')
 
+@app.route('/')
+async def home():
+    return "App is running"
+
 @client.event
 async def on_ready():
     print(f'We have logged in as {client.user}')
 
 async def start_server():
     config = Config()
-    config.bind = ["0.0.0.0:5000"]
-    config.certfile = 'cert.pem'
-    config.keyfile = 'key_nopass.pem'
+    port = int(os.environ.get("PORT", 8000))
+    config.bind = [f"0.0.0.0:{port}"]
+    config.certfile = None  # 'piotr_bot/cert.pem'
+    config.keyfile = None  # 'piotr_bot/key_nopass.pem'
 
     await hypercorn.asyncio.serve(app, config)
 
