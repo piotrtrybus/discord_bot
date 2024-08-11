@@ -3,6 +3,8 @@ from quart import Quart, request, jsonify
 import asyncio
 import os
 from dotenv import load_dotenv
+import hypercorn.asyncio
+from hypercorn.config import Config
 
 load_dotenv()
 
@@ -52,10 +54,6 @@ async def fetch_member_ids():
     if guild:
         member_ids = [member.id for member in guild.members]
         print(f'Member IDs: {member_ids}')
-        # Optionally, write member IDs to a file
-        with open('member_ids.txt', 'w') as file:
-            for member_id in member_ids:
-                file.write(f'{member_id}\n')
         return member_ids
     else:
         print('Guild not found')
@@ -65,20 +63,24 @@ async def fetch_member_ids():
 async def on_ready():
     print(f'We have logged in as {client.user}')
 
+async def start_server():
+    config = Config()
+    config.bind = ["0.0.0.0:5000"]
+    config.certfile = 'cert.pem'
+    config.keyfile = 'key_nopass.pem'
+
+    await hypercorn.asyncio.serve(app, config)
+
 async def main():
-    # Start the Quart app in a separate task
-    task1 = asyncio.create_task(app.run_task(host='0.0.0.0', port=5000))
-    print("Quart server is running on http://0.0.0.0:5000")
-    
-    # Run the bot
     DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
     if not DISCORD_TOKEN:
         raise ValueError("No Discord token found in environment variables.")
-    
-    task2 = asyncio.create_task(client.start(DISCORD_TOKEN))
-    
-    await task1
-    await task2
+
+    # Start the server and bot concurrently
+    server_task = asyncio.create_task(start_server())
+    bot_task = asyncio.create_task(client.start(DISCORD_TOKEN))
+
+    await asyncio.gather(server_task, bot_task)
 
 if __name__ == '__main__':
     asyncio.run(main())
