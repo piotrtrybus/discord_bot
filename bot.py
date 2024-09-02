@@ -12,53 +12,68 @@ load_dotenv()
 intents = discord.Intents.default()
 intents.messages = True
 intents.guilds = True
-intents.members = True  # Ensure you have the intent to fetch members
+intents.members = True
 
 client = discord.Client(intents=intents)
-
-# Initialize Quart app
 app = Quart(__name__)
 
 def check_auth(auth_header):
     if not auth_header:
         return False
-
     try:
         auth_type, credentials = auth_header.split(" ")
-        if auth_type.lower() != "basic":
-            return False
-
-        decoded_credentials = base64.b64decode(credentials).decode("utf-8")
-        username, password = decoded_credentials.split(":")
-
-        # Replace 'your_username' and 'your_password' with actual credentials
-        return username == "p_trybus" and password == "auth123"
+        if auth_type.lower() == "basic":
+            decoded_credentials = base64.b64decode(credentials).decode("utf-8")
+            username, password = decoded_credentials.split(":")
+            return username == "p_trybus" and password == "auth123"
     except Exception as e:
         print(f"[ERROR] Invalid authentication format: {e}")
-        return False
+    return False
 
 @app.route('/webhook', methods=['POST'])
 async def webhook():
-    auth_header = request.headers.get('Authorization')
-    if not check_auth(auth_header):
+    if not check_auth(request.headers.get('Authorization')):
         return Response("Unauthorized", status=401)
 
     data = await request.get_json()
     user_id = data.get('user_id')
-    message_content = data.get('message', 'Hello World')  # Default to 'Hello World' if no message is provided
-    if user_id:
-        # Schedule the send_dm coroutine in the event loop
-        asyncio.create_task(send_dm(user_id, message_content))
-    return '', 200
+    message_content = data.get('message', 'hello')
+    guild_id = data.get('guild_id') 
 
-async def send_dm(user_id, content):
+    if user_id and guild_id:
+        asyncio.create_task(send_dm(user_id, message_content, guild_id))
+        return '', 200
+    else:
+        return jsonify({"error": "user_id and guild_id are required"}), 400
+
+async def send_dm(user_id, content, guild_id):
     try:
-        user = await client.fetch_user(user_id)
-        if user:
-            await user.send(content)
-            print(f"Message sent to {user.display_name} ({user_id})")
+        guild = client.get_guild(guild_id)
+        if not guild:
+            guild = await client.fetch_guild(guild_id)
+            if not guild:
+                print(f"Guild {guild_id} not found even after fetching")
+                return
+
+        # Try to get the member from cache
+        member = guild.get_member(user_id)
+        if not member:
+            # Fetch the member if not in cache
+            try:
+                member = await guild.fetch_member(user_id)
+                print(f"Member {user_id} fetched from API")
+            except discord.NotFound:
+                print(f"Member {user_id} not found in guild {guild_id} even after fetching")
+                return
+
+        optin_role = discord.utils.get(guild.roles, name="Cool guy")
+        if optin_role in member.roles:
+            await member.send(content)
+            print(f"Message sent to {member.display_name} ({user_id})")
+        else:
+            print(f"User {member.display_name} ({user_id}) does not have the {optin_role} role")
     except discord.Forbidden:
-        print(f"Couldn't send a DM to {user.display_name} ({user_id}) - Forbidden")
+        print(f"Couldn't send a DM to user {user_id} - Forbidden")
     except discord.HTTPException as e:
         print(f"Failed to send a DM to {user_id}: {e}")
     except Exception as e:
@@ -67,8 +82,7 @@ async def send_dm(user_id, content):
 
 @app.route('/fetch_member_ids', methods=['GET'])
 async def fetch_member_ids_endpoint():
-    auth_header = request.headers.get('Authorization')
-    if not check_auth(auth_header):
+    if not check_auth(request.headers.get('Authorization')):
         return Response("Unauthorized", status=401)
 
     try:
@@ -79,14 +93,11 @@ async def fetch_member_ids_endpoint():
         return jsonify({"error": str(e)}), 500
 
 async def fetch_member_ids():
-    YOUR_GUILD_ID = 1260188923569770536  # Replace with your actual Guild ID
-    guild = client.get_guild(YOUR_GUILD_ID)
+    guild_id = 1260188923569770536  # DISCORD SERVER ID
+    guild = client.get_guild(guild_id)
     if guild:
-        member_ids = [member.id for member in guild.members]
-        print(f'Member IDs: {member_ids}')
-        return member_ids
+        return [member.id for member in guild.members]
     else:
-        print('Guild not found')
         raise Exception('Guild not found')
 
 @app.route('/')
@@ -95,27 +106,19 @@ async def home():
 
 @client.event
 async def on_ready():
-    print(f'We have logged in as {client.user}')
+    print(f'App logged in as {client.user}')
 
 async def start_server():
     config = Config()
-    port = int(os.environ.get("PORT", 8000))
-    config.bind = [f"0.0.0.0:{port}"]
-    config.certfile = None  # 'piotr_bot/cert.pem'
-    config.keyfile = None  # 'piotr_bot/key_nopass.pem'
-
+    config.bind = [f"0.0.0.0:{int(os.environ.get('PORT', 8000))}"]
     await hypercorn.asyncio.serve(app, config)
 
 async def main():
-    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-    if not DISCORD_TOKEN:
-        raise ValueError("No Discord token found in environment variables.")
+    discord_token = os.getenv('DISCORD_TOKEN')
+    if not discord_token:
+        raise ValueError("No Discord token found.")
 
-    # Start the server and bot concurrently
-    server_task = asyncio.create_task(start_server())
-    bot_task = asyncio.create_task(client.start(DISCORD_TOKEN))
-
-    await asyncio.gather(server_task, bot_task)
+    await asyncio.gather(start_server(), client.start(discord_token))
 
 if __name__ == '__main__':
     asyncio.run(main())
